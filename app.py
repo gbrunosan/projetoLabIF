@@ -2,6 +2,10 @@ from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS  # Importar o CORS
 from datetime import datetime
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from functools import wraps
+
+
 
 # Defina seus modelos e rotas abaixo
 
@@ -9,8 +13,19 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)  # Configura o CORS para permitir requisições de origens diferentes
 
+app.config['JWT_SECRET_KEY'] = '12345678secreto'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'  # Definindo o banco SQLite
+
 db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+class Usuario(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(100), unique=True, nullable=False)
+    senha = db.Column(db.String(100), nullable=False)  # Depois usaremos hash
+    tipo = db.Column(db.String(20), nullable=False)  # 'admin' ou 'comum'
+
 
 # Modelo de Laboratório
 class Laboratorio(db.Model):
@@ -31,11 +46,79 @@ class Reserva(db.Model):
     laboratorio_id = db.Column(db.Integer, db.ForeignKey('laboratorio.id'), nullable=False)
 
 # Inicializar o banco de dados
+# Inicializar o banco de dados
 with app.app_context():
     db.create_all()
 
+    # Criar admin padrão se nenhum usuário existir
+    if Usuario.query.count() == 0:
+        admin = Usuario(
+            nome='Admin Master',
+            email='admin@labif.com',    
+            senha='123456',
+            tipo='admin'
+        )
+        db.session.add(admin)
+        db.session.commit()
+
+def admin_required(f):
+    @wraps(f)
+    @jwt_required()
+    def decorated(*args, **kwargs):
+        user_id = get_jwt_identity()
+        usuario = Usuario.query.get(user_id)
+
+        if not usuario or usuario.tipo != 'admin':
+            return jsonify({'error': 'Acesso restrito a administradores'}), 403
+
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/api/usuarios', methods=['POST'])
+@admin_required
+def criar_usuario():
+    data = request.get_json()
+    nome = data.get('nome')
+    email = data.get('email')
+    senha = data.get('senha')
+    tipo = data.get('tipo', 'comum')  # padrão: comum
+
+    if not nome or not email or not senha:
+        return jsonify({'error': 'Campos obrigatórios faltando'}), 400
+
+    if tipo not in ['admin', 'comum']:
+        return jsonify({'error': 'Tipo de usuário inválido'}), 400
+
+    # Verificar se email já existe
+    if Usuario.query.filter_by(email=email).first():
+        return jsonify({'error': 'Email já cadastrado'}), 409
+
+    novo_usuario = Usuario(nome=nome, email=email, senha=senha, tipo=tipo)
+    db.session.add(novo_usuario)
+    db.session.commit()
+
+    return jsonify({'message': 'Usuário criado com sucesso'}), 201
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    senha = data.get('senha')
+
+    usuario = Usuario.query.filter_by(email=email).first()
+
+    if not usuario or usuario.senha != senha:
+        return jsonify({'error': 'Credenciais inválidas'}), 401
+
+    access_token = create_access_token(identity=str(usuario.id))
+    return jsonify({'token': access_token, 'tipo': usuario.tipo, 'nome': usuario.nome}), 200
+
+
+
 # Rota para retornar os laboratórios como JSON
 @app.route('/api/laboratorios', methods=['GET'])
+@jwt_required()
 def api_laboratorios():
     laboratorios = Laboratorio.query.all()
     return jsonify([{
@@ -46,6 +129,7 @@ def api_laboratorios():
 
 # Rota para retornar as reservas de um laboratório como JSON
 @app.route('/api/laboratorio/<int:id>', methods=['GET'])
+@jwt_required()
 def api_laboratorio(id):
     laboratorio = Laboratorio.query.get_or_404(id)
     reservas = Reserva.query.filter_by(laboratorio_id=id).all()
@@ -60,6 +144,7 @@ def api_laboratorio(id):
     } for reserva in reservas])
 
 @app.route('/api/laboratorio/<int:id>/reservas', methods=['GET'])
+@jwt_required()
 def api_reservas_por_data(id):
     data = request.args.get('data')
 
@@ -100,6 +185,7 @@ def api_reservas_por_data(id):
 
 # Adicionar um novo Laboratório via API
 @app.route('/api/add_laboratorio', methods=['POST'])
+@admin_required
 def api_add_laboratorio():
     try:
         data = request.get_json()
@@ -110,14 +196,15 @@ def api_add_laboratorio():
         db.session.add(novo_laboratorio)
         db.session.commit()
         
-        return jsonify({'message': 'Laboratorio criado com sucesso!'}), 201  # Código 201 para sucesso
+        return jsonify({'message': 'Laboratório criado com sucesso!'}), 201
     except Exception as e:
-        return jsonify({'error': 'Erro ao criar laboratorio', 'details': str(e)}), 500  # Se algo der errado
+        return jsonify({'error': 'Erro ao criar laboratório', 'details': str(e)}), 500
 
 
 
 # Adicionar Nova Reserva via API
 @app.route('/api/add_reserva', methods=['POST'])
+@jwt_required()
 def api_add_reserva():
     data = request.get_json()
     data_inicio = data['data_inicio']
