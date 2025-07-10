@@ -4,6 +4,7 @@ from flask_cors import CORS  # Importar o CORS
 from datetime import datetime
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 
@@ -18,12 +19,11 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'  # Definindo o b
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-
 class Usuario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(100), unique=True, nullable=False)
-    senha = db.Column(db.String(100), nullable=False)  # Depois usaremos hash
+    senha = db.Column(db.String(100), nullable=False)  # Agora com hash
     tipo = db.Column(db.String(20), nullable=False)  # 'admin' ou 'comum'
 
 
@@ -46,20 +46,9 @@ class Reserva(db.Model):
     laboratorio_id = db.Column(db.Integer, db.ForeignKey('laboratorio.id'), nullable=False)
 
 # Inicializar o banco de dados
-# Inicializar o banco de dados
 with app.app_context():
     db.create_all()
 
-    # Criar admin padrão se nenhum usuário existir
-    if Usuario.query.count() == 0:
-        admin = Usuario(
-            nome='Admin Master',
-            email='admin@labif.com',    
-            senha='123456',
-            tipo='admin'
-        )
-        db.session.add(admin)
-        db.session.commit()
 
 def admin_required(f):
     @wraps(f)
@@ -82,23 +71,29 @@ def criar_usuario():
     nome = data.get('nome')
     email = data.get('email')
     senha = data.get('senha')
-    tipo = data.get('tipo', 'comum')  # padrão: comum
+    tipo = data.get('tipo', 'professor')  # Tipo padrão é 'professor'
+
+    # Validação para garantir que o tipo de usuário seja apenas admin ou professor
+    if tipo not in ['admin', 'professor']:
+        return jsonify({'error': 'Tipo de usuário inválido'}), 400
 
     if not nome or not email or not senha:
         return jsonify({'error': 'Campos obrigatórios faltando'}), 400
 
-    if tipo not in ['admin', 'comum']:
-        return jsonify({'error': 'Tipo de usuário inválido'}), 400
-
-    # Verificar se email já existe
+    # Verificar se o email já existe
     if Usuario.query.filter_by(email=email).first():
         return jsonify({'error': 'Email já cadastrado'}), 409
 
-    novo_usuario = Usuario(nome=nome, email=email, senha=senha, tipo=tipo)
+    # Gerar hash da senha
+    senha_hash = generate_password_hash(senha, method='sha256')
+
+    # Criar o novo usuário com o tipo adequado
+    novo_usuario = Usuario(nome=nome, email=email, senha=senha_hash, tipo=tipo)
     db.session.add(novo_usuario)
     db.session.commit()
 
     return jsonify({'message': 'Usuário criado com sucesso'}), 201
+
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -106,14 +101,41 @@ def login():
     email = data.get('email')
     senha = data.get('senha')
 
+    # Buscar o usuário pelo email
     usuario = Usuario.query.filter_by(email=email).first()
 
-    if not usuario or usuario.senha != senha:
-        return jsonify({'error': 'Credenciais inválidas'}), 401
+    if not usuario or not check_password_hash(usuario.senha, senha):
+        return jsonify({'error': 'Credenciais inválidas'}), 401  # Retorna erro se as credenciais não forem válidas
 
+    # Gerar o token de acesso
     access_token = create_access_token(identity=str(usuario.id))
-    return jsonify({'token': access_token, 'tipo': usuario.tipo, 'nome': usuario.nome}), 200
 
+    # Retorna o token e informações do usuário
+    return jsonify({
+        'token': access_token,
+        'tipo': usuario.tipo,
+        'nome': usuario.nome,
+        'email': usuario.email  # Agora também retorna o email
+    }), 200
+
+
+@app.route('/api/atualizar_senha', methods=['PUT'])
+@jwt_required()
+def atualizar_senha():
+    data = request.get_json()
+    nova_senha = data.get('nova_senha')
+    usuario_id = get_jwt_identity()
+
+    usuario = Usuario.query.get(usuario_id)
+
+    if not usuario:
+        return jsonify({'error': 'Usuário não encontrado'}), 404
+
+    # Atualiza a senha com hash
+    usuario.senha = generate_password_hash(nova_senha, method='sha256')
+    db.session.commit()
+
+    return jsonify({'message': 'Senha atualizada com sucesso'}), 200
 
 
 # Rota para retornar os laboratórios como JSON
