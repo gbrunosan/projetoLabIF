@@ -5,20 +5,19 @@ from datetime import datetime
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
-
-
-
-# Defina seus modelos e rotas abaixo
-
+from datetime import timedelta
 
 app = Flask(__name__)
-CORS(app)  # Configura o CORS para permitir requisições de origens diferentes
+CORS(app) 
 
 app.config['JWT_SECRET_KEY'] = '12345678secreto'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'  # Definindo o banco SQLite
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'
+
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
+
 class Usuario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -44,6 +43,8 @@ class Reserva(db.Model):
     repetir_horario = db.Column(db.Boolean, default=False)
     anotacoes = db.Column(db.Text, nullable=True)
     laboratorio_id = db.Column(db.Integer, db.ForeignKey('laboratorio.id'), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)  # Novo campo para associar à tabela de usuários
+
 
 # Inicializar o banco de dados
 with app.app_context():
@@ -137,6 +138,47 @@ def atualizar_senha():
 
     return jsonify({'message': 'Senha atualizada com sucesso'}), 200
 
+@app.route('/api/minhas_reservas', methods=['GET'])
+@jwt_required()
+def minhas_reservas():
+    # Pega o ID do usuário logado a partir do token JWT
+    usuario_id = get_jwt_identity()
+
+    # Buscar os laboratórios e as reservas associadas ao usuário logado
+    laboratorios = Laboratorio.query.all()  # Pegando todos os laboratórios
+    reservas = Reserva.query.filter_by(usuario_id=usuario_id).all()  # Reservas do usuário
+
+    # Criar um dicionário para armazenar reservas agrupadas por laboratório
+    laboratorios_reservas = {}
+
+    # Agrupar as reservas por laboratório
+    for reserva in reservas:
+        laboratorio_id = reserva.laboratorio_id
+        if laboratorio_id not in laboratorios_reservas:
+            laboratorios_reservas[laboratorio_id] = {
+                'id': laboratorio_id,
+                'nome': reserva.laboratorio.nome,  # Assumindo que o relacionamento está correto
+                'reservas': []
+            }
+        
+        # Adicionar a reserva à lista de reservas do respectivo laboratório
+        laboratorios_reservas[laboratorio_id]['reservas'].append({
+            'id': reserva.id,
+            'data_inicio': reserva.data_inicio,
+            'data_fim': reserva.data_fim,
+            'professor_responsavel': reserva.professor_responsavel,
+            'num_estudantes': reserva.num_estudantes,
+            'repetir_horario': reserva.repetir_horario,
+            'anotacoes': reserva.anotacoes,
+            'laboratorio_id': reserva.laboratorio_id
+        })
+
+    # Converter o dicionário para uma lista de laboratórios
+    laboratorios_formatados = list(laboratorios_reservas.values())
+
+    return jsonify(laboratorios_formatados), 200
+
+
 
 # Rota para retornar os laboratórios como JSON
 @app.route('/api/laboratorios', methods=['GET'])
@@ -203,7 +245,67 @@ def api_reservas_por_data(id):
         ]
     })
 
+@app.route('/api/reserva/<int:id>', methods=['PUT'])
+@jwt_required()
+def editar_reserva(id):
+    # Pega o ID do usuário logado a partir do token JWT
+    usuario_id = get_jwt_identity()
 
+    # Buscar a reserva pelo ID
+    reserva = Reserva.query.get(id)
+
+    # Verificar se a reserva existe
+    if not reserva:
+        return jsonify({'msg': 'Reserva não encontrada'}), 404
+    # Verificar se a reserva pertence ao usuário logado
+    if int(reserva.usuario_id) != int(usuario_id):  # Força ambos os IDs a serem inteiros
+        return jsonify({'msg': 'Você não tem permissão para editar esta reserva'}), 403
+
+
+    # Obter os dados da reserva do corpo da requisição
+    data_inicio = request.json.get('data_inicio', reserva.data_inicio)
+    data_fim = request.json.get('data_fim', reserva.data_fim)
+    professor_responsavel = request.json.get('professor_responsavel', reserva.professor_responsavel)
+    num_estudantes = request.json.get('num_estudantes', reserva.num_estudantes)
+    anotacoes = request.json.get('anotacoes', reserva.anotacoes)
+
+    # Atualizar a reserva com os novos dados
+    reserva.data_inicio = data_inicio
+    reserva.data_fim = data_fim
+    reserva.professor_responsavel = professor_responsavel
+    reserva.num_estudantes = num_estudantes
+    reserva.anotacoes = anotacoes
+
+    # Commitando as mudanças no banco
+    db.session.commit()
+
+    return jsonify({'msg': 'Reserva atualizada com sucesso'}), 200
+
+
+
+# Rota para excluir uma reserva
+@app.route('/api/reserva/<int:id>', methods=['DELETE'])
+@jwt_required()
+def excluir_reserva(id):
+    # Pega o ID do usuário logado a partir do token JWT
+    usuario_id = get_jwt_identity()
+
+    # Buscar a reserva pelo ID
+    reserva = Reserva.query.get(id)
+
+    # Verificar se a reserva existe
+    if not reserva:
+        return jsonify({'msg': 'Reserva não encontrada'}), 404
+
+    # Verificar se a reserva pertence ao usuário logado
+    if int(reserva.usuario_id) != int(usuario_id):  # Força ambos os IDs a serem inteiros
+        return jsonify({'msg': 'Você não tem permissão para editar esta reserva'}), 403
+
+    # Excluir a reserva
+    db.session.delete(reserva)
+    db.session.commit()
+
+    return jsonify({'msg': 'Reserva excluída com sucesso'}), 200
 
 # Adicionar um novo Laboratório via API
 @app.route('/api/add_laboratorio', methods=['POST'])
@@ -224,7 +326,6 @@ def api_add_laboratorio():
 
 
 
-# Adicionar Nova Reserva via API
 @app.route('/api/add_reserva', methods=['POST'])
 @jwt_required()
 def api_add_reserva():
@@ -236,8 +337,10 @@ def api_add_reserva():
     repetir_horario = data['repetir_horario']
     anotacoes = data['anotacoes']
     laboratorio_id = data['laboratorio_id']
-    # Converte as datas recebidas para datetime
+    
+    usuario_id = get_jwt_identity()  # Recupera o ID do usuário logado
 
+    # Converte as datas recebidas para datetime
     nova_reserva_inicio = datetime.strptime(data_inicio, "%Y-%m-%dT%H:%M")
     nova_reserva_fim = datetime.strptime(data_fim, "%Y-%m-%dT%H:%M")
 
@@ -251,16 +354,12 @@ def api_add_reserva():
     for reserva in reservas_existentes:
         reserva_inicio = datetime.strptime(reserva.data_inicio, "%Y-%m-%dT%H:%M")
         reserva_fim = datetime.strptime(reserva.data_fim, "%Y-%m-%dT%H:%M")
-        
-        # Converte as datas recebidas para datetime
-        nova_reserva_inicio = datetime.strptime(data_inicio, "%Y-%m-%dT%H:%M")
-        nova_reserva_fim = datetime.strptime(data_fim, "%Y-%m-%dT%H:%M")
 
         # Verifica se há sobreposição de horários
         if (nova_reserva_inicio < reserva_fim and nova_reserva_fim > reserva_inicio):
             return jsonify({'error': 'Horário já ocupado!'}), 400  # Retorna erro se houver conflito
 
-    # Criar a nova reserva se não houver conflito
+    # Criar a nova reserva associada ao usuário logado
     nova_reserva = Reserva(
         data_inicio=data_inicio, 
         data_fim=data_fim, 
@@ -268,13 +367,15 @@ def api_add_reserva():
         num_estudantes=num_estudantes, 
         repetir_horario=repetir_horario, 
         anotacoes=anotacoes,
-        laboratorio_id=laboratorio_id
+        laboratorio_id=laboratorio_id,
+        usuario_id=usuario_id  # Associando a reserva ao usuário logado
     )
 
     db.session.add(nova_reserva)
     db.session.commit()
 
     return jsonify({'message': 'Reserva criada com sucesso!'}), 201  # Código 201 para sucesso
+
 
 # Rodar o servidor Flask
 if __name__ == "__main__":
