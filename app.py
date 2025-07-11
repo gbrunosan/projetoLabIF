@@ -6,11 +6,16 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 
 app = Flask(__name__)
 CORS(app) 
 
-app.config['JWT_SECRET_KEY'] = '12345678secreto'
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///reservas.db'
 
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
@@ -209,6 +214,11 @@ def minhas_reservas():
             'laboratorio_id': reserva.laboratorio_id
         })
 
+    for laboratorio_id, laboratorio_info in laboratorios_reservas.items():
+        laboratorio_info['reservas'] = sorted(
+            laboratorio_info['reservas'], key=lambda x: datetime.strptime(x['data_inicio'], "%Y-%m-%dT%H:%M")
+        )
+
     laboratorios_formatados = list(laboratorios_reservas.values())
 
     return jsonify(laboratorios_formatados), 200
@@ -368,6 +378,9 @@ def api_add_reserva():
         data_inicio_obj = datetime.strptime(data_inicio, "%Y-%m-%dT%H:%M")
         data_fim_obj = datetime.strptime(data_fim, "%Y-%m-%dT%H:%M")
         
+        if data_fim_obj <= data_inicio_obj:
+            return jsonify({'error': 'A data de fim não pode ser anterior à data de início.'}), 400
+
         reserva_duracao = data_fim_obj - data_inicio_obj
 
         nova_reserva = Reserva(
@@ -375,7 +388,7 @@ def api_add_reserva():
             data_fim=data_fim,
             professor_responsavel=professor_responsavel,
             num_estudantes=num_estudantes,
-            repetir_horario=1,
+            repetir_horario=True,
             anotacoes=anotacoes,
             laboratorio_id=laboratorio_id,
             usuario_id=usuario_id
@@ -388,7 +401,7 @@ def api_add_reserva():
 
                 data_fim_reserva = data_inicio_reserva + reserva_duracao
 
-                nova_reserva = Reserva(
+                nova_reserva_repetida = Reserva(
                     data_inicio=data_inicio_reserva.strftime("%Y-%m-%dT%H:%M"),
                     data_fim=data_fim_reserva.strftime("%Y-%m-%dT%H:%M"),
                     professor_responsavel=professor_responsavel,
@@ -399,7 +412,7 @@ def api_add_reserva():
                     usuario_id=usuario_id
                 )
 
-                db.session.add(nova_reserva)
+                db.session.add(nova_reserva_repetida)
 
     db.session.commit()
     return jsonify({'message': 'Reservas criadas com sucesso!'}), 201
