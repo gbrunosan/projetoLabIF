@@ -65,6 +65,8 @@ def admin_required(f):
     return decorated
 
 
+from werkzeug.security import generate_password_hash
+
 @app.route('/api/usuarios', methods=['POST'])
 @admin_required
 def criar_usuario():
@@ -85,8 +87,8 @@ def criar_usuario():
     if Usuario.query.filter_by(email=email).first():
         return jsonify({'error': 'Email já cadastrado'}), 409
 
-    # Gerar hash da senha
-    senha_hash = generate_password_hash(senha, method='sha256')
+    # Gerar hash da senha (corrigido para 'pbkdf2:sha256')
+    senha_hash = generate_password_hash(senha, method='pbkdf2:sha256')
 
     # Criar o novo usuário com o tipo adequado
     novo_usuario = Usuario(nome=nome, email=email, senha=senha_hash, tipo=tipo)
@@ -94,6 +96,7 @@ def criar_usuario():
     db.session.commit()
 
     return jsonify({'message': 'Usuário criado com sucesso'}), 201
+
 
 
 @app.route('/api/login', methods=['POST'])
@@ -120,23 +123,23 @@ def login():
     }), 200
 
 
-@app.route('/api/atualizar_senha', methods=['PUT'])
-@jwt_required()
-def atualizar_senha():
-    data = request.get_json()
-    nova_senha = data.get('nova_senha')
-    usuario_id = get_jwt_identity()
+# @app.route('/api/atualizar_senha', methods=['PUT'])
+# @jwt_required()
+# def atualizar_senha():
+#     data = request.get_json()
+#     nova_senha = data.get('nova_senha')
+#     usuario_id = get_jwt_identity()
 
-    usuario = Usuario.query.get(usuario_id)
+#     usuario = Usuario.query.get(usuario_id)
 
-    if not usuario:
-        return jsonify({'error': 'Usuário não encontrado'}), 404
+#     if not usuario:
+#         return jsonify({'error': 'Usuário não encontrado'}), 404
 
-    # Atualiza a senha com hash
-    usuario.senha = generate_password_hash(nova_senha, method='sha256')
-    db.session.commit()
+#     # Atualiza a senha com hash
+#     usuario.senha = generate_password_hash(nova_senha, method='sha256')
+#     db.session.commit()
 
-    return jsonify({'message': 'Senha atualizada com sucesso'}), 200
+#     return jsonify({'message': 'Senha atualizada com sucesso'}), 200
 
 @app.route('/api/minhas_reservas', methods=['GET'])
 @jwt_required()
