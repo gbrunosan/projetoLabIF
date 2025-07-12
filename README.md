@@ -13,7 +13,7 @@ Este é o back-end da aplicação de reservas de laboratórios para o **IFMS**. 
 
 ## Como Executar o Projeto
 
-Eu coloquei uma chave no env para ser usada na geração de tokens, se usado em produção alterem essa chave no env já que ele essa está pública.
+Eu coloquei uma chave no env para ser usada na geração de tokens, se usado em produção alterem essa chave no env já que ele essa está pública. A maioria das rotas são autenticadas então sugiro usar o Front-End aqui https://github.com/gbrunosan/frontend-projeto-lab para facilitar, dá para usar algo como o postman mas tem que ficar passando o token em toda requisição.
 
 ```bash
 # O tempo de duração de um token para manter um usuário logado também é alterável nessa linha
