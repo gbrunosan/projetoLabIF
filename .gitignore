@@ -1,5 +1,6 @@
 # Ignorar o diretório do ambiente virtual
 venv/
+instance/
 
 # Ignorar arquivos de compilação
 *.pyc
