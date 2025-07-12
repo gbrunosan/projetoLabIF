@@ -11,7 +11,6 @@ import os
 
 load_dotenv()
 
-
 app = Flask(__name__)
 CORS(app) 
 
@@ -57,6 +56,19 @@ class Reserva(db.Model):
 with app.app_context():
     db.create_all()
 
+    # Verificar se o admin já existe
+    admin_existente = Usuario.query.filter_by(email="admin@lab.com").first()
+    if not admin_existente:
+        # Criação do usuário admin com email e senha
+        admin = Usuario(
+            email="admin@lab.com",
+            senha=generate_password_hash("12345678", method='sha256')  # Usando hashing para a senha
+        )
+        db.session.add(admin)
+        db.session.commit()
+        print("Usuário admin criado com sucesso!")
+    else:
+        print("O usuário admin já existe.")
 
 
 def admin_required(f):
@@ -120,6 +132,7 @@ def criar_usuario():
     return jsonify({'message': 'Usuário criado com sucesso'}), 201
 
 
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -140,6 +153,7 @@ def login():
         'nome': usuario.nome,
         'email': usuario.email
     }), 200
+
 
 
 @app.route('/api/verificar_disponibilidade', methods=['POST'])
@@ -184,6 +198,7 @@ def verificar_disponibilidade():
     }), 200
 
 
+
 @app.route('/api/minhas_reservas', methods=['GET'])
 @jwt_required()
 def minhas_reservas():
@@ -224,6 +239,7 @@ def minhas_reservas():
     return jsonify(laboratorios_formatados), 200
 
 
+
 # Rota para retornar os laboratórios como JSON
 @app.route('/api/laboratorios', methods=['GET'])
 @jwt_required()
@@ -234,6 +250,7 @@ def api_laboratorios():
         'nome': lab.nome,
         'local': lab.local
     } for lab in laboratorios])
+
 
 
 # Rota para retornar as reservas de um laboratório como JSON
@@ -251,6 +268,7 @@ def api_laboratorio(id):
         'repetir_horario': reserva.repetir_horario,
         'anotacoes': reserva.anotacoes
     } for reserva in reservas])
+
 
 
 @app.route('/api/laboratorio/<int:id>/reservas', methods=['GET'])
@@ -292,6 +310,7 @@ def api_reservas_por_data(id):
     })
 
 
+
 @app.route('/api/reserva/<int:id>', methods=['PUT'])
 @jwt_required()
 def editar_reserva(id):
@@ -303,7 +322,6 @@ def editar_reserva(id):
         return jsonify({'msg': 'Reserva não encontrada'}), 404
     if int(reserva.usuario_id) != int(usuario_id):
         return jsonify({'msg': 'Você não tem permissão para editar esta reserva'}), 403
-
 
     data_inicio = request.json.get('data_inicio', reserva.data_inicio)
     data_fim = request.json.get('data_fim', reserva.data_fim)
@@ -320,6 +338,7 @@ def editar_reserva(id):
     db.session.commit()
 
     return jsonify({'msg': 'Reserva atualizada com sucesso'}), 200
+
 
 
 @app.route('/api/reserva/<int:id>', methods=['DELETE'])
@@ -341,6 +360,7 @@ def excluir_reserva(id):
     return jsonify({'msg': 'Reserva excluída com sucesso'}), 200
 
 
+
 @app.route('/api/add_laboratorio', methods=['POST'])
 @admin_required
 def api_add_laboratorio():
@@ -358,6 +378,51 @@ def api_add_laboratorio():
         return jsonify({'error': 'Erro ao criar laboratório', 'details': str(e)}), 500
 
 
+
+@app.route('/api/laboratorio/<int:id>', methods=['PUT'])
+@admin_required
+def editar_laboratorio(id):
+    data = request.get_json()
+    nome = data.get('nome')
+    local = data.get('local')
+
+    laboratorio = Laboratorio.query.get(id)
+
+    if not laboratorio:
+        return jsonify({'error': 'Laboratório não encontrado'}), 404
+
+    if nome:
+        laboratorio.nome = nome
+    if local:
+        laboratorio.local = local
+
+    db.session.commit()
+
+    return jsonify({'message': 'Laboratório atualizado com sucesso'}), 200
+
+
+
+@app.route('/api/laboratorio/<int:id>', methods=['DELETE'])
+@admin_required
+def excluir_laboratorio(id):
+    laboratorio = Laboratorio.query.get(id)
+
+    if not laboratorio:
+        return jsonify({'msg': 'Laboratório não encontrado'}), 404
+
+    try:
+        Reserva.query.filter_by(laboratorio_id=id).delete()
+
+        db.session.delete(laboratorio)
+        db.session.commit()
+
+        return jsonify({'msg': 'Laboratório excluído com sucesso!'}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': 'Erro ao excluir laboratório', 'details': str(e)}), 500
+
+
+
 @app.route('/api/add_reserva', methods=['POST'])
 @jwt_required()
 def api_add_reserva():
@@ -371,7 +436,7 @@ def api_add_reserva():
         repetir_horario = reserva['repetir_horario']
         anotacoes = reserva['anotacoes']
         laboratorio_id = reserva['laboratorio_id']
-        datas_repetir = reserva.get('datas_repetir', [])  # Lista de datas selecionadas para repetição
+        datas_repetir = reserva.get('datas_repetir', [])
         
         usuario_id = get_jwt_identity()
 
@@ -380,6 +445,19 @@ def api_add_reserva():
         
         if data_fim_obj <= data_inicio_obj:
             return jsonify({'error': 'A data de fim não pode ser anterior à data de início.'}), 400
+
+        reservas_existentes = Reserva.query.filter_by(laboratorio_id=laboratorio_id).all()
+
+        for reserva_existente in reservas_existentes:
+            reserva_inicio = datetime.strptime(reserva_existente.data_inicio, "%Y-%m-%dT%H:%M")
+            reserva_fim = datetime.strptime(reserva_existente.data_fim, "%Y-%m-%dT%H:%M")
+
+            if not (data_fim_obj <= reserva_inicio or data_inicio_obj >= reserva_fim):
+                laboratorio_nome = Laboratorio.query.get(laboratorio_id).nome
+                return jsonify({
+                    'error': f'O laboratório "{laboratorio_nome}" já está reservado para o horário de {reserva_inicio.strftime("%H:%M")} às {reserva_fim.strftime("%H:%M")}.'
+                }), 400
+
 
         reserva_duracao = data_fim_obj - data_inicio_obj
 
@@ -416,7 +494,6 @@ def api_add_reserva():
 
     db.session.commit()
     return jsonify({'message': 'Reservas criadas com sucesso!'}), 201
-
 
 
 
