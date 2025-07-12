@@ -52,23 +52,23 @@ class Reserva(db.Model):
 
 
 
-# Inicializar o banco de dados
 with app.app_context():
     db.create_all()
 
-    # Verificar se o admin já existe
-    admin_existente = Usuario.query.filter_by(email="admin@lab.com").first()
-    if not admin_existente:
-        # Criação do usuário admin com email e senha
+    if not Usuario.query.filter_by(email="admin@lab.com").first():
         admin = Usuario(
+            nome="Administrador",
             email="admin@lab.com",
-            senha=generate_password_hash("12345678", method='sha256')  # Usando hashing para a senha
+            senha=generate_password_hash("12345678", method='pbkdf2:sha256'),
+            tipo="admin"
         )
         db.session.add(admin)
         db.session.commit()
         print("Usuário admin criado com sucesso!")
     else:
-        print("O usuário admin já existe.")
+        print("Usuário admin já existe.")
+
+    
 
 
 def admin_required(f):
